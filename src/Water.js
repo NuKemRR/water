@@ -1,36 +1,40 @@
 import * as THREE from 'three'
-import vertexShader from './shaders/water.vert?raw';
-import fragmentShader from './shaders/water.frag?raw';
 
 export default class Water {
-    constructor(textureLoader) {
+    constructor(textureLoader, camera) {
 
         this.params = {
-            size: 150,
+            size: 20,
             waterLevel: 0,
+            color: new THREE.Color(0.1, 0.3, 1.0),
+            moveFactor: 0.05,
+            waveStrength: 1.6,
+            showDepth: true,
         }
 
         this.createClippingPlanes();
         this.createFBOs();
         this.loadTextures(textureLoader);
 
-        this.geometry = new THREE.PlaneGeometry(1, 1, 2, 2);
+        this.geometry = new THREE.PlaneGeometry(1, 1, 1, 1);
         this.geometry.rotateX(-Math.PI / 2);
         this.material = new THREE.MeshStandardMaterial({
-            color: 0x3366aa,
             metalness: 0.0,
             roughness: 0.2,
             transparent: true,
         });
 
-        this.material.onBeforeCompile = (shader) =>
-        {
-            shader.uniforms.uReflectionTexture = { value: this.reflectionTarget.texture };
-            shader.uniforms.uRefractionTexture = { value: this.refractionTarget.texture };
-            shader.uniforms.uDuDvTexture = { value: this.dudvTexture };
-            shader.uniforms.uNormalMap = { value: this.normalMap };
-            shader.uniforms.uMoveFactor = { value: 0.0 };
-            shader.uniforms.uDepthTexture = { value: this.depthTarget.texture };
+        this.material.onBeforeCompile = (shader) => {
+            shader.uniforms.uReflectionTexture = {value: this.reflectionTarget.texture};
+            shader.uniforms.uRefractionTexture = {value: this.refractionTarget.texture};
+            shader.uniforms.uDepthTexture = {value: this.depthTarget.depthTexture};
+            shader.uniforms.uDuDvTexture = {value: this.dudvTexture};
+            shader.uniforms.uNormalMap = {value: this.normalMap};
+            shader.uniforms.uMoveFactor = {value: this.params.moveFactor};
+            shader.uniforms.uWaveStrength = {value: this.params.waveStrength};
+            shader.uniforms.uColor = {value: this.params.color};
+            shader.uniforms.uCameraNear = {value: camera.near};
+            shader.uniforms.uCameraFar = {value: camera.far};
 
             this.material.userData.shader = shader;
 
@@ -53,16 +57,19 @@ ${shader.vertexShader}
             );
 
             shader.fragmentShader =
-                `varying vec2 vUv;
-                varying vec4 clipSpace;
+                `
+         varying vec2 vUv;
+         varying vec4 clipSpace;
          uniform sampler2D uReflectionTexture;
          uniform sampler2D uRefractionTexture;
          uniform sampler2D uDuDvTexture;
-         uniform sampler2D uNormalMap;
          uniform sampler2D uDepthTexture;
+         uniform sampler2D uNormalMap;
+         uniform vec3 uColor;
          uniform float uMoveFactor;
-         
-         const float waveStrength = 1.6;
+         uniform float uWaveStrength;
+         uniform float uCameraNear;
+         uniform float uCameraFar;
         ` + shader.fragmentShader;
 
             shader.fragmentShader = shader.fragmentShader.replace(
@@ -73,9 +80,17 @@ ${shader.vertexShader}
         vec2 refractTexCoords = vec2(ndc.x, ndc.y);
         vec2 reflectTexCoords = vec2(ndc.x, 1.0 - ndc.y);
 
+        float depth = texture2D(uDepthTexture, refractTexCoords).r;
+        float floorDistance = 2.0 * uCameraNear * uCameraFar / (uCameraFar + uCameraNear - (2.0 * depth - 1.0) * (uCameraFar - uCameraNear));
+        
+        depth = gl_FragCoord.z;
+        float waterDistance = 2.0 * uCameraNear * uCameraFar / (uCameraFar + uCameraNear - (2.0 * depth - 1.0) * (uCameraFar - uCameraNear));
+        float waterDepth = floorDistance - waterDistance;
+        
         vec2 distortedTexCoords = texture2D(uDuDvTexture, vec2(vUv.x + uMoveFactor, vUv.y)).rg * 0.1;
         distortedTexCoords = vUv + vec2(distortedTexCoords.x, distortedTexCoords.y + uMoveFactor);
-        vec2 totalDist = (texture(uDuDvTexture, distortedTexCoords).rg * 2.0 - 1.0) * waveStrength;
+        vec2 totalDist = (texture(uDuDvTexture, distortedTexCoords).rg * 2.0 - 1.0) * uWaveStrength;
+        totalDist *= clamp(waterDepth * 0.1, 0.0, 1.0);
         
         vec4 normalMap = texture2D(uNormalMap, distortedTexCoords);
         normal.xyz = vec3(normalMap.r * 2.0 - 1.0, normalMap.b, normalMap.g * 2.0 - 1.0);
@@ -93,7 +108,8 @@ ${shader.vertexShader}
         refractiveFactor = pow(1.0 - refractiveFactor, 2.0);
 
         vec4 water = mix(reflectTexture, refractTexture, refractiveFactor);
-        diffuseColor = mix(water, vec4(0.1, 0.2, 0.7, 1.0), 0.5);
+        diffuseColor = mix(water, vec4(uColor, 1.0), 0.5);
+        diffuseColor.a = clamp(waterDepth * 0.1, 0.0, 1.0);
         `
             );
         }
@@ -101,6 +117,51 @@ ${shader.vertexShader}
         this.mesh = new THREE.Mesh(this.geometry, this.material);
         this.mesh.scale.set(this.params.size, this.params.size, this.params.size);
         this.mesh.position.y = this.params.waterLevel;
+        this.mesh.scale.set(this.params.size, 1, this.params.size)
+
+        this.debugScene = new THREE.Scene();
+        this.debugCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        this.geo = new THREE.PlaneGeometry(2, 2, 2, 2);
+        this.mat = new THREE.ShaderMaterial({
+            uniforms: {
+                uDepthTexture: {value: this.depthTarget.depthTexture},
+                cameraNear: {value: camera.near},
+                cameraFar: {value: camera.far},
+            },
+            vertexShader: `
+    varying vec2 vUv;
+    void main(){
+    vUv = uv;
+    gl_Position = vec4(position.xy, 0.0, 1.0);
+    }`,
+            fragmentShader: `
+    varying vec2 vUv;
+    uniform sampler2D uDepthTexture;
+    uniform float cameraNear;
+    uniform float cameraFar;
+    
+        float linearizeDepth(float depth) {
+      float z = depth * 2.0 - 1.0; // NDC
+      return (2.0 * cameraNear * cameraFar)
+           / (cameraFar + cameraNear - z * (cameraFar - cameraNear));
+    }
+    
+    void main(){
+    float depth = texture2D(uDepthTexture, vUv).r;
+    float linear = linearizeDepth(depth);
+    
+    float near = cameraNear;
+    float far = 50.0; // tune this to your scene size
+    float remapped = (linear - near) / (far - near);
+    
+    remapped = clamp(remapped, 0.0, 1.0);
+    
+    gl_FragColor = vec4(vec3(remapped), 1.0);
+    }`,
+            depthWrite: false
+        })
+        this.debugMesh = new THREE.Mesh(this.geo, this.mat);
+        this.debugScene.add(this.debugMesh);
     }
 
     getMesh() {
@@ -127,16 +188,10 @@ ${shader.vertexShader}
             format: THREE.RGBAFormat,
         });
 
-        const depthTexture = new THREE.DepthTexture();
-        depthTexture.type = THREE.UnsignedShortType;
-
-        this.depthTarget = new THREE.WebGLRenderTarget(bufferWidth, bufferHeight, {
-            minFilter: THREE.NearestFilter,
-            magFilter: THREE.NearestFilter,
-            format: THREE.RGBAFormat,
-            depthTexture: depthTexture,
-            depthBuffer: true
-        });
+        this.depthTarget = new THREE.WebGLRenderTarget(bufferWidth, bufferHeight);
+        this.depthTarget.depthTexture = new THREE.DepthTexture(bufferWidth, bufferHeight);
+        this.depthTarget.depthTexture.type = THREE.UnsignedShortType;
+        this.depthTarget.depthTexture.format = THREE.DepthFormat;
 
         this.reflectionTarget.texture.colorSpace = THREE.SRGBColorSpace;
         this.refractionTarget.texture.colorSpace = THREE.SRGBColorSpace;
@@ -144,10 +199,14 @@ ${shader.vertexShader}
 
     renderFBO(camera, scene, renderer) {
         this.mesh.visible = false;
+        this.debugMesh.visible = false;
+
+        this.mat.uniforms.cameraNear.value = camera.near;
+        this.mat.uniforms.cameraFar.value = camera.far;
 
         // --- RENDER REFLECTION ---
         // Mathematically flip the camera position for reflection
-        const dist = (camera.position.y) * 2; // Assuming water is at Y=0
+        const dist = (camera.position.y) * 2;
         camera.position.y -= dist;
         camera.up.set(0, -1, 0); // Flip camera orientation
         camera.updateMatrixWorld();
@@ -166,12 +225,15 @@ ${shader.vertexShader}
         renderer.setRenderTarget(this.refractionTarget);
         renderer.render(scene, camera);
 
+        renderer.clippingPlanes = [];
+
         renderer.setRenderTarget(this.depthTarget);
         renderer.render(scene, camera);
 
-        renderer.setRenderTarget(null);
-        renderer.clippingPlanes = [];
         this.mesh.visible = true;
+        this.debugMesh.visible = true
+
+        renderer.setRenderTarget(null);
     }
 
     createClippingPlanes() {

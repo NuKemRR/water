@@ -2,10 +2,10 @@ import './style.css'
 import * as THREE from 'three'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import Water from './Water.js'
 import DebugUI from "./DebugUI.js";
-import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
+import {HDRLoader} from 'three/addons/loaders/HDRLoader.js';
 
 const params = {
     delta: 0.0,
@@ -21,8 +21,7 @@ renderer.localClippingEnabled = true;
 document.body.appendChild(renderer.domElement)
 
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
-const d = 10;
-camera.position.set(d, d, d);
+camera.position.set(-1.842527014360247, 0.4111996693081914, -4.197380284182957);
 
 const scene = new THREE.Scene();
 
@@ -36,8 +35,8 @@ document.body.appendChild(stats.dom)
 
 const loader = new THREE.TextureLoader()
 const controls = new OrbitControls(camera, renderer.domElement);
-const water = new Water(loader);
-new DebugUI();
+const water = new Water(loader, camera);
+new DebugUI(water);
 const timer = new THREE.Timer();
 timer.connect(document);
 
@@ -59,14 +58,12 @@ gltfLoader.load(
     'public/terrain_mesh_test_water.glb',
     (gltf) => {
         const model = gltf.scene;
-        model.scale.set(13, 13, 13);
-        model.position.set(0, 5, 0);
+        model.position.set(0, 0.5, 0);
         scene.add(model);
 
         console.log("Model loaded successfully!", gltf);
     },
     (xhr) => {
-        console.log((xhr.loaded / xhr.total * 100) + '% loaded');
     },
     (error) => {
         console.error('An error happened', error);
@@ -82,7 +79,7 @@ function update() {
     params.elapsedTime = timer.getElapsed()
 
     if (water.material.userData.shader) {
-        water.material.userData.shader.uniforms.uMoveFactor.value += 0.05 * params.delta;
+        water.material.userData.shader.uniforms.uMoveFactor.value += water.params.moveFactor * params.delta;
         water.material.userData.shader.uniforms.uMoveFactor.value %= 1.0;
     }
 
@@ -93,7 +90,7 @@ function update() {
 
     controls.update();
     renderer.render(scene, camera);
-
+    //renderer.render(water.debugScene, water.debugCamera);
     stats.end();
 }
 
