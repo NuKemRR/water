@@ -4,7 +4,7 @@ export default class Water {
     constructor(textureLoader, camera) {
 
         this.params = {
-            size: 20,
+            size: 30,
             waterLevel: 0,
             color: new THREE.Color(0.1, 0.3, 1.0),
             moveFactor: 0.05,
@@ -87,10 +87,12 @@ ${shader.vertexShader}
         float waterDistance = 2.0 * uCameraNear * uCameraFar / (uCameraFar + uCameraNear - (2.0 * depth - 1.0) * (uCameraFar - uCameraNear));
         float waterDepth = floorDistance - waterDistance;
         
+        const float v = 0.9;
+        
         vec2 distortedTexCoords = texture2D(uDuDvTexture, vec2(vUv.x + uMoveFactor, vUv.y)).rg * 0.1;
         distortedTexCoords = vUv + vec2(distortedTexCoords.x, distortedTexCoords.y + uMoveFactor);
         vec2 totalDist = (texture(uDuDvTexture, distortedTexCoords).rg * 2.0 - 1.0) * uWaveStrength;
-        totalDist *= clamp(waterDepth * 0.1, 0.0, 1.0);
+        totalDist *= clamp(waterDepth * v, 0.0, 1.0);
         
         vec4 normalMap = texture2D(uNormalMap, distortedTexCoords);
         normal.xyz = vec3(normalMap.r * 2.0 - 1.0, normalMap.b, normalMap.g * 2.0 - 1.0);
@@ -109,7 +111,7 @@ ${shader.vertexShader}
 
         vec4 water = mix(reflectTexture, refractTexture, refractiveFactor);
         diffuseColor = mix(water, vec4(uColor, 1.0), 0.5);
-        diffuseColor.a = clamp(waterDepth * 0.1, 0.0, 1.0);
+        diffuseColor.a = clamp(waterDepth * v, 0.0, 1.0);
         `
             );
         }
