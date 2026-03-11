@@ -92,7 +92,7 @@ ${shader.vertexShader}
         distortedUV = vUv + vec2(distortedUV.x, distortedUV.y + uMoveFactor);
         vec2 totalDistortion = (texture2D(uDuDvTexture, distortedUV).rg * 2.0 - 1.0) * uWaveStrength;
         
-        totalDistortion *= clamp(waterDepth / 5.0, 0.0, 1.0);
+        totalDistortion *= clamp(waterDepth, 0.0, 1.0);
         
         refractUV += totalDistortion;
         refractUV = clamp(refractUV, 0.001, 0.999);
@@ -114,7 +114,7 @@ ${shader.vertexShader}
 
         vec4 water = mix(reflectTexture, refractTexture, refractiveFactor);
         diffuseColor = mix(water, vec4(uColor, 1.0), 0.5);
-        diffuseColor.a = clamp(waterDepth / 5.0, 0.0, 1.0);
+        diffuseColor.a = clamp(waterDepth, 0.0, 1.0);
         `
             );
         }

@@ -26,7 +26,7 @@ camera.position.set(-1.842527014360247, 0.4111996693081914, -4.197380284182957);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x3081ff);
 
-const sun = new THREE.DirectionalLight(0xffffff, 2.0);
+const sun = new THREE.DirectionalLight(0xffffff, 0.0);
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.1);
 sun.position.set(0, 1000, 0);
 
@@ -45,21 +45,21 @@ scene.add(water.getMesh());
 scene.add(sun);
 scene.add(ambientLight);
 
-//const hdrLoader = new HDRLoader();
-//
-//hdrLoader.load('/skybox.hdr', (texture) => {
-//    texture.mapping = THREE.EquirectangularReflectionMapping;
-//    scene.background = texture;
-//    scene.environment = texture;
-//    renderer.toneMappingExposure = 1.0;
-//});
+const hdrLoader = new HDRLoader();
+
+hdrLoader.load('/skybox.hdr', (texture) => {
+    texture.mapping = THREE.EquirectangularReflectionMapping;
+    scene.background = texture;
+    scene.environment = texture;
+    renderer.toneMappingExposure = 1.0;
+});
 
 const gltfLoader = new GLTFLoader();
 gltfLoader.load(
     '/terrain_mesh_test_water.glb',
     (gltf) => {
         const model = gltf.scene;
-        model.position.set(0, 2, 0);
+        model.position.set(0, 0, 0);
         scene.add(model);
 
         console.log("Model loaded successfully!", gltf);
