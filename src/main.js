@@ -45,6 +45,18 @@ scene.add(water.getMesh());
 scene.add(sun);
 scene.add(ambientLight);
 
+const geo = new THREE.CylinderGeometry(0.7, 0.6, 4);
+const mat = new THREE.MeshStandardMaterial(
+    {
+        color: 0x232fc2,
+        roughness: 0.5,
+        metalness: 0.6
+    })
+const mesh = new THREE.Mesh(geo, mat);
+mesh.rotateZ(THREE.MathUtils.degToRad(85));
+mesh.position.set(5, 1.5, 0)
+scene.add(mesh);
+
 const hdrLoader = new HDRLoader();
 
 hdrLoader.load('/skybox.hdr', (texture) => {

@@ -55,7 +55,7 @@ ${shader.vertexShader}
 `.replace(
                 '#include <begin_vertex>',
                 `#include <begin_vertex>
-  clipSpace = projectionMatrix * viewMatrix * vec4(transformed, 1.0);`
+  clipSpace = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);`
             );
 
             shader.fragmentShader =
@@ -79,7 +79,7 @@ ${shader.vertexShader}
                 `#include <normal_fragment_maps>
         vec2 ndc = (clipSpace.xy / clipSpace.w) / 2.0 + 0.5;
         vec2 refractUV = vec2(ndc.x, ndc.y);
-        vec2 reflectUV = vec2(ndc.x, -ndc.y);
+        vec2 reflectUV = vec2(ndc.x, 1.0 - ndc.y);
         
         float depth = texture2D(uDepthTexture, refractUV).r;
         float floorDistance = 2.0 * uNear * uFar / (uFar + uNear - (2.0 * depth - 1.0) * (uFar - uNear));
@@ -88,33 +88,34 @@ ${shader.vertexShader}
         float waterDistance = 2.0 * uNear * uFar / (uFar + uNear - (2.0 * depth - 1.0) * (uFar - uNear));
         float waterDepth = floorDistance - waterDistance;
         
-        vec2 distortedUV = texture(uDuDvTexture, vec2(vUv.x + uMoveFactor, vUv.y)).rg * 0.1;
+        vec2 distortedUV = texture2D(uDuDvTexture, vec2(vUv.x + uMoveFactor, vUv.y)).rg * 0.1;
         distortedUV = vUv + vec2(distortedUV.x, distortedUV.y + uMoveFactor);
         vec2 totalDistortion = (texture2D(uDuDvTexture, distortedUV).rg * 2.0 - 1.0) * uWaveStrength;
         
-        totalDistortion *= clamp(waterDepth, 0.0, 1.0);
+        totalDistortion *= clamp(waterDepth * 0.9, 0.0, 1.0);
         
         refractUV += totalDistortion;
         refractUV = clamp(refractUV, 0.001, 0.999);
         
         reflectUV += totalDistortion;
         reflectUV.x = clamp(reflectUV.x, 0.001, 0.999);
-        reflectUV.y = clamp(reflectUV.y, -0.999, -0.001);
+        reflectUV.y = clamp(reflectUV.y, 0.001, 0.999);
         
-        vec4 reflectTexture = texture(uReflectionTexture, reflectUV);
-        vec4 refractTexture = texture(uRefractionTexture, refractUV);
+        vec4 reflectTexture = texture2D(uReflectionTexture, reflectUV);
+        vec4 refractTexture = texture2D(uRefractionTexture, refractUV);
         
         vec4 normalMap = texture2D(uNormalMap, distortedUV);
-        normal.xyz = vec3(normalMap.r * 2.0 - 1.0, normalMap.b, normalMap.g * 2.0 - 1.0);
+        normal.xyz = vec3(normalMap.r * 2.0 - 1.0, normalMap.b * 3.0 - 1.0, normalMap.g * 2.0 - 1.0);
         normal = normalize(normal);
 
         vec3 viewVector = normalize(vViewPosition);
-        float refractiveFactor = dot(viewVector, normal);
-        refractiveFactor = pow(refractiveFactor, 2.0);
+        float fresnel = dot(viewVector, normal);
+        fresnel = pow(fresnel, 0.5);
+        fresnel = clamp(fresnel, 0.0, 1.0);
 
-        vec4 water = mix(reflectTexture, refractTexture, refractiveFactor);
-        diffuseColor = mix(water, vec4(uColor, 1.0), 0.5);
-        diffuseColor.a = clamp(waterDepth, 0.0, 1.0);
+        vec4 water = mix(reflectTexture, refractTexture, fresnel);
+        diffuseColor = mix(water, vec4(uColor, 1.0), 0.2);
+        diffuseColor.a = clamp(waterDepth * 0.9, 0.0, 1.0);
         `
             );
         }
@@ -159,27 +160,66 @@ ${shader.vertexShader}
     renderFBO(camera, scene, renderer) {
         this.mesh.visible = false;
 
-        const originalQuaternion = camera.quaternion.clone();
 
-        // Reflection
-        const dist = 2 * (camera.position.y - this.params.waterLevel);
-        camera.position.y -= dist;
-        camera.up.set(0, -1, 0);
+        const originalPosition = camera.position.clone();
+        const originalQuaternion = camera.quaternion.clone();
+        const originalUp = camera.up.clone();
+
+        const waterLevel = this.params.waterLevel;
+
+        const normal = new THREE.Vector3(0, 1, 0);
+        const planePoint = new THREE.Vector3(0, waterLevel, 0);
+
+        /* ======================
+           REFLECTION PASS
+        ====================== */
+
+        const camPos = camera.position.clone();
+        const toPlane = camPos.clone().sub(planePoint);
+
+        const reflectedPos = camPos.clone().sub(
+            normal.clone().multiplyScalar(2 * toPlane.dot(normal))
+        );
+
+        const lookDir = new THREE.Vector3();
+        camera.getWorldDirection(lookDir);
+
+        const target = camPos.clone().add(lookDir);
+        const targetToPlane = target.clone().sub(planePoint);
+
+        const reflectedTarget = target.clone().sub(
+            normal.clone().multiplyScalar(2 * targetToPlane.dot(normal))
+        );
+
+        camera.position.copy(reflectedPos);
+        camera.up.set(0, 1, 0);
+        camera.lookAt(reflectedTarget);
         camera.updateMatrixWorld();
 
         renderer.clippingPlanes = [this.reflectionClipPlane];
         renderer.setRenderTarget(this.reflectionTarget);
         renderer.render(scene, camera);
 
-        // Refraction
-        camera.position.y += dist;
-        camera.up.set(0, 1, 0);
-        camera.quaternion.copy(originalQuaternion);  // restore original orientation
+        /* ======================
+           RESTORE CAMERA
+        ====================== */
+
+        camera.position.copy(originalPosition);
+        camera.quaternion.copy(originalQuaternion);
+        camera.up.copy(originalUp);
         camera.updateMatrixWorld();
+
+        /* ======================
+           REFRACTION PASS
+        ====================== */
 
         renderer.clippingPlanes = [this.refractionClipPlane];
         renderer.setRenderTarget(this.refractionTarget);
         renderer.render(scene, camera);
+
+        /* ======================
+           RESET
+        ====================== */
 
         renderer.clippingPlanes = [];
         renderer.setRenderTarget(null);
@@ -188,8 +228,8 @@ ${shader.vertexShader}
     }
 
     createClippingPlanes() {
-        this.refractionClipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), this.params.waterLevel + 1);
-        this.reflectionClipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -this.params.waterLevel + 1);
+        this.refractionClipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), this.params.waterLevel);
+        this.reflectionClipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -this.params.waterLevel);
     }
 
     loadTextures(loader) {
