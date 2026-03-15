@@ -26,12 +26,5 @@ export default class DebugUI {
         folderWater.addBinding(water.params, 'waveStrength', {label: "Wave Strength", min: 0, max: 10, step: 0.01}).on('change', (e)=>{
             water.material.userData.shader.uniforms.uWaveStrength.value = e.value;
         });
-
-        folderWater.addBinding(water.params, 'showDepth',
-            {label: "Show Depth Buffer"})
-            .on('change', (e)=>{
-                water.debugMesh.visible = e.value;
-                water.debugCamera.visible = e.value;
-        })
     }
 }

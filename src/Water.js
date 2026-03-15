@@ -1,12 +1,12 @@
 import * as THREE from 'three'
 
 export default class Water {
-    constructor(textureLoader, camera) {
+    constructor(textureLoader, camera, scene, renderer) {
 
         this.params = {
             size: 30,
             waterLevel: 0,
-            color: new THREE.Color(0.1, 0.3, 1.0),
+            color: new THREE.Color(0.34, 0.4, 0.8),
             moveFactor: 0.05,
             waveStrength: 0.03,
             showDepth: true,
@@ -16,7 +16,7 @@ export default class Water {
         this.createFBOs();
         this.loadTextures(textureLoader);
 
-        this.geometry = new THREE.PlaneGeometry(1, 1, 1, 1);
+        this.geometry = new THREE.PlaneGeometry(1, 1, 128, 128);
         this.geometry.rotateX(-Math.PI / 2);
         this.material = new THREE.MeshStandardMaterial({
             metalness: 0.0,
@@ -24,9 +24,13 @@ export default class Water {
             transparent: true,
             depthTest: true,
             depthWrite: false,
+            wireframe: false,
         });
 
         this.material.onBeforeCompile = (shader) => {
+            shader.uniforms.uTime = {value: 0.0};
+            shader.uniforms.uWaveHeight = {value: 2.0};
+            shader.uniforms.uWaveScale = {value: 1.0};
             shader.uniforms.uReflectionTexture = {value: this.reflectionTarget.texture};
             shader.uniforms.uRefractionTexture = {value: this.refractionTarget.texture};
             shader.uniforms.uDepthTexture = {value: this.refractionTarget.depthTexture};
@@ -47,7 +51,45 @@ export default class Water {
                 vUv = uv * 2.0;`);
 
             shader.vertexShader =
-                `varying vec2 vUv;\n` + shader.vertexShader;
+                `
+                varying vec2 vUv;
+                
+                uniform float uTime;
+                uniform float uWaveHeight;
+                uniform float uWaveScale;
+                float hash(vec2 p){
+    return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453);
+}
+
+float noise(vec2 p){
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+
+    float a = hash(i);
+    float b = hash(i + vec2(1.0,0.0));
+    float c = hash(i + vec2(0.0,1.0));
+    float d = hash(i + vec2(1.0,1.0));
+
+    vec2 u = f*f*(3.0-2.0*f);
+
+    return mix(a,b,u.x) +
+           (c-a)*u.y*(1.0-u.x) +
+           (d-b)*u.x*u.y;
+}
+
+float fbm(vec2 p){
+    float v = 0.0;
+    float a = 0.5;
+
+    for(int i=0;i<4;i++){
+        v += a * noise(p);
+        p *= 2.0;
+        a *= 0.5;
+    }
+
+    return v;
+}
+                `+shader.vertexShader;
 
             shader.vertexShader = `
 varying vec4 clipSpace;
@@ -55,7 +97,13 @@ ${shader.vertexShader}
 `.replace(
                 '#include <begin_vertex>',
                 `#include <begin_vertex>
-  clipSpace = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);`
+    vec2 waveUV = position.xz * uWaveScale + uTime * 0.05;
+    
+    float wave = fbm(waveUV);
+    wave += fbm(waveUV * 2.0) * 0.5;
+    
+    transformed.y += wave * uWaveHeight;
+    clipSpace = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);`
             );
 
             shader.fragmentShader =
@@ -88,7 +136,7 @@ ${shader.vertexShader}
         float waterDistance = 2.0 * uNear * uFar / (uFar + uNear - (2.0 * depth - 1.0) * (uFar - uNear));
         float waterDepth = floorDistance - waterDistance;
         
-        vec2 distortedUV = texture2D(uDuDvTexture, vec2(vUv.x + uMoveFactor, vUv.y)).rg * 0.1;
+        vec2 distortedUV = texture2D(uDuDvTexture, vec2(vUv.x + uMoveFactor, vUv.y)).rg * 0.01;
         distortedUV = vUv + vec2(distortedUV.x, distortedUV.y + uMoveFactor);
         vec2 totalDistortion = (texture2D(uDuDvTexture, distortedUV).rg * 2.0 - 1.0) * uWaveStrength;
         
@@ -105,12 +153,12 @@ ${shader.vertexShader}
         vec4 refractTexture = texture2D(uRefractionTexture, refractUV);
         
         vec4 normalMap = texture2D(uNormalMap, distortedUV);
-        normal.xyz = vec3(normalMap.r * 2.0 - 1.0, normalMap.b * 3.0 - 1.0, normalMap.g * 2.0 - 1.0);
+        normal.xyz = vec3(normalMap.r * 2.0 - 1.0, normalMap.b * 2.0 - 1.0, normalMap.g * 2.0 - 1.0);
         normal = normalize(normal);
 
         vec3 viewVector = normalize(vViewPosition);
         float fresnel = dot(viewVector, normal);
-        fresnel = pow(fresnel, 0.5);
+        fresnel = pow(fresnel, 8.0);
         fresnel = clamp(fresnel, 0.0, 1.0);
 
         vec4 water = mix(reflectTexture, refractTexture, fresnel);
@@ -130,8 +178,11 @@ ${shader.vertexShader}
         return this.mesh;
     }
 
-    update(camera) {
-
+    update(time) {
+        if (this.material.userData.shader)
+        {
+            this.material.userData.shader.uniforms.uTime.value = time;
+        }
     }
 
     createFBOs() {
@@ -228,8 +279,8 @@ ${shader.vertexShader}
     }
 
     createClippingPlanes() {
-        this.refractionClipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), this.params.waterLevel);
-        this.reflectionClipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -this.params.waterLevel);
+        this.refractionClipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), this.params.waterLevel + 1);
+        this.reflectionClipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -this.params.waterLevel + 1);
     }
 
     loadTextures(loader) {

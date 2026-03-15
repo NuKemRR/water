@@ -6,6 +6,11 @@ import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import Water from './Water.js'
 import DebugUI from "./DebugUI.js";
 import {HDRLoader} from 'three/addons/loaders/HDRLoader.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
+import common from './shaders/common.glsl?raw'
+import simplex from './shaders/simplex.glsl?raw'
 
 const params = {
     delta: 0.0,
@@ -36,7 +41,7 @@ document.body.appendChild(stats.dom)
 
 const loader = new THREE.TextureLoader()
 const controls = new OrbitControls(camera, renderer.domElement);
-const water = new Water(loader, camera);
+const water = new Water(loader, camera, scene, renderer);
 new DebugUI(water);
 const timer = new THREE.Timer();
 timer.connect(document);
@@ -59,7 +64,7 @@ scene.add(mesh);
 
 const hdrLoader = new HDRLoader();
 
-hdrLoader.load('/skybox.hdr', (texture) => {
+hdrLoader.load('/skybox2.hdr', (texture) => {
     texture.mapping = THREE.EquirectangularReflectionMapping;
     scene.background = texture;
     scene.environment = texture;
@@ -83,6 +88,69 @@ gltfLoader.load(
     }
 );
 
+const UnderwaterShader = {
+
+    uniforms: {
+        tDiffuse: { value: null },
+        uTime: { value: 0.0 },
+        uStrength: {value: 5.0},
+        uSpeed: { value: new THREE.Vector2(0.03, 0.07) }
+    },
+
+    vertexShader: `
+        varying vec2 vUv;
+
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+        }
+    `,
+
+    fragmentShader: `${common}\n${simplex}
+        uniform float uTime;
+        uniform float uStrength;
+        uniform vec2 uSpeed;
+        uniform sampler2D tDiffuse;
+        
+        varying vec2 vUv;
+
+        void main() {
+        
+            vec2 uv = vUv;
+            uv.x += sin(uv.x * (uSpeed.x * 0.01) + uTime);
+            uv.y += -cos(uv.y * (uSpeed.y * 0.01) + uTime);
+            
+            gln_tFBMOpts opts;
+            opts.seed = 0.1;
+            opts.persistance = 0.5;
+            opts.lacunarity = 3.0;
+            opts.scale = 2.0;
+            opts.redistribution = 2.0;
+            opts.octaves = 2;
+            opts.terbulance = false;
+            opts.ridge = false;
+            
+            float n = gln_sfbm(uv, opts);
+            vec2 noise = vec2(n);
+            
+            vec4 color = vec4(0.34, 0.4, 0.8, 1.0) + vec4(noise.x, noise.y, 1.0, 1.0);
+            //color = vec4(noise.x);
+            color *= texture2D(tDiffuse, vUv + noise * (uStrength / 100.0));
+            
+            gl_FragColor = color;
+        }
+    `
+}
+const composer = new EffectComposer(renderer)
+
+const renderPass = new RenderPass(scene, camera)
+composer.addPass(renderPass)
+
+const underwaterPass = new ShaderPass(UnderwaterShader)
+underwaterPass.enabled = false
+
+composer.addPass(underwaterPass)
+
 function update() {
     stats.begin();
 
@@ -98,11 +166,17 @@ function update() {
 
     timer.update();
 
-    water.update(camera);
+    water.update(params.elapsedTime);
     water.renderFBO(camera, scene, renderer);
 
     controls.update();
-    renderer.render(scene, camera);
+
+    //renderer.render(scene, camera);
+
+    underwaterPass.enabled = true;// = camera.position.y < water.params.waterLevel + 0.5;
+    underwaterPass.uniforms.uTime.value = params.elapsedTime;
+    composer.render();
+
     stats.end();
 }
 
