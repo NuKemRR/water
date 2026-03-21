@@ -1,4 +1,15 @@
 import * as THREE from 'three'
+import {EffectComposer} from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import {RenderPass} from 'three/examples/jsm/postprocessing/RenderPass.js'
+import {ShaderPass} from 'three/examples/jsm/postprocessing/ShaderPass.js'
+import common from './shaders/common.glsl?raw'
+import simplex from './shaders/simplex.glsl?raw'
+import waterVertex from './shaders/water/water.vert?raw'
+import waterFragment from './shaders/water/water.frag?raw'
+import underwaterVertex from './shaders/water/underwater.vert?raw'
+import underwaterFragment from './shaders/water/underwater.frag?raw'
+import {OutputPass} from 'three/examples/jsm/postprocessing/OutputPass.js'
+import {MathUtils} from "three";
 
 export default class Water {
     constructor(textureLoader, camera, scene, renderer) {
@@ -9,8 +20,34 @@ export default class Water {
             color: new THREE.Color(0.34, 0.4, 0.8),
             moveFactor: 0.05,
             waveStrength: 0.03,
-            showDepth: true,
+            underwaterFactor: 0.01,
+            waterWaveHeight: 0.0,
         }
+
+        this.underwaterShader = {
+
+            uniforms: {
+                tDiffuse: {value: null},
+                uTime: {value: 0.0},
+                uStrength: {value: 2.0},
+                uSpeed: {value: new THREE.Vector2(0.03, 0.07)},
+                uUnderwaterFactor: {value: 0.5},
+            },
+
+            vertexShader: underwaterVertex,
+
+            fragmentShader: `${common}\n${simplex}\n${underwaterFragment}`
+        }
+
+        this.composer = new EffectComposer(renderer)
+
+        this.renderPass = new RenderPass(scene, camera)
+        this.composer.addPass(this.renderPass)
+
+        this.underwaterPass = new ShaderPass(this.underwaterShader)
+        this.underwaterPass.enabled = false
+
+        this.composer.addPass(this.underwaterPass)
 
         this.createClippingPlanes();
         this.createFBOs();
@@ -29,7 +66,7 @@ export default class Water {
 
         this.material.onBeforeCompile = (shader) => {
             shader.uniforms.uTime = {value: 0.0};
-            shader.uniforms.uWaveHeight = {value: 2.0};
+            shader.uniforms.uWaveHeight = {value: this.params.waterWaveHeight};
             shader.uniforms.uWaveScale = {value: 1.0};
             shader.uniforms.uReflectionTexture = {value: this.reflectionTarget.texture};
             shader.uniforms.uRefractionTexture = {value: this.refractionTarget.texture};
@@ -41,6 +78,9 @@ export default class Water {
             shader.uniforms.uColor = {value: this.params.color};
             shader.uniforms.uNear = {value: camera.near};
             shader.uniforms.uFar = {value: camera.far};
+            shader.uniforms.uFoamDepth = { value: 0.5 };      // depth threshold where foam appears
+            shader.uniforms.uFoamStrength = { value: 2.0 };   // foam brightness
+            shader.uniforms.uFoamSpeed = { value: 0.1 };      // how fast foam animates
 
             this.material.userData.shader = shader;
 
@@ -51,63 +91,18 @@ export default class Water {
                 vUv = uv * 2.0;`);
 
             shader.vertexShader =
-                `
+                `${common}${simplex}\n
                 varying vec2 vUv;
                 
                 uniform float uTime;
                 uniform float uWaveHeight;
-                uniform float uWaveScale;
-                float hash(vec2 p){
-    return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453);
-}
+                uniform float uWaveScale;\n` + shader.vertexShader;
 
-float noise(vec2 p){
-    vec2 i = floor(p);
-    vec2 f = fract(p);
+            shader.vertexShader = `varying vec4 clipSpace;${shader.vertexShader}`.replace('#include <begin_vertex>', `#include <begin_vertex>\n${waterVertex}`);
 
-    float a = hash(i);
-    float b = hash(i + vec2(1.0,0.0));
-    float c = hash(i + vec2(0.0,1.0));
-    float d = hash(i + vec2(1.0,1.0));
-
-    vec2 u = f*f*(3.0-2.0*f);
-
-    return mix(a,b,u.x) +
-           (c-a)*u.y*(1.0-u.x) +
-           (d-b)*u.x*u.y;
-}
-
-float fbm(vec2 p){
-    float v = 0.0;
-    float a = 0.5;
-
-    for(int i=0;i<4;i++){
-        v += a * noise(p);
-        p *= 2.0;
-        a *= 0.5;
-    }
-
-    return v;
-}
-                `+shader.vertexShader;
-
-            shader.vertexShader = `
-varying vec4 clipSpace;
-${shader.vertexShader}
-`.replace(
-                '#include <begin_vertex>',
-                `#include <begin_vertex>
-    vec2 waveUV = position.xz * uWaveScale + uTime * 0.05;
-    
-    float wave = fbm(waveUV);
-    wave += fbm(waveUV * 2.0) * 0.5;
-    
-    transformed.y += wave * uWaveHeight;
-    clipSpace = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);`
-            );
-
+            // Fragment - Uniforms
             shader.fragmentShader =
-                `
+                `${common}\n${simplex}\n
          varying vec2 vUv;
          varying vec4 clipSpace;
          uniform sampler2D uReflectionTexture;
@@ -120,69 +115,27 @@ ${shader.vertexShader}
          uniform float uWaveStrength;
          uniform float uNear;
          uniform float uFar;
+         uniform float uFoamDepth;
+         uniform float uFoamStrength;
+         uniform float uFoamSpeed;
         ` + shader.fragmentShader;
 
-            shader.fragmentShader = shader.fragmentShader.replace(
-                '#include <normal_fragment_maps>',
-                `#include <normal_fragment_maps>
-        vec2 ndc = (clipSpace.xy / clipSpace.w) / 2.0 + 0.5;
-        vec2 refractUV = vec2(ndc.x, ndc.y);
-        vec2 reflectUV = vec2(ndc.x, 1.0 - ndc.y);
-        
-        float depth = texture2D(uDepthTexture, refractUV).r;
-        float floorDistance = 2.0 * uNear * uFar / (uFar + uNear - (2.0 * depth - 1.0) * (uFar - uNear));
-
-        depth = gl_FragCoord.z;
-        float waterDistance = 2.0 * uNear * uFar / (uFar + uNear - (2.0 * depth - 1.0) * (uFar - uNear));
-        float waterDepth = floorDistance - waterDistance;
-        
-        vec2 distortedUV = texture2D(uDuDvTexture, vec2(vUv.x + uMoveFactor, vUv.y)).rg * 0.01;
-        distortedUV = vUv + vec2(distortedUV.x, distortedUV.y + uMoveFactor);
-        vec2 totalDistortion = (texture2D(uDuDvTexture, distortedUV).rg * 2.0 - 1.0) * uWaveStrength;
-        
-        totalDistortion *= clamp(waterDepth * 0.9, 0.0, 1.0);
-        
-        refractUV += totalDistortion;
-        refractUV = clamp(refractUV, 0.001, 0.999);
-        
-        reflectUV += totalDistortion;
-        reflectUV.x = clamp(reflectUV.x, 0.001, 0.999);
-        reflectUV.y = clamp(reflectUV.y, 0.001, 0.999);
-        
-        vec4 reflectTexture = texture2D(uReflectionTexture, reflectUV);
-        vec4 refractTexture = texture2D(uRefractionTexture, refractUV);
-        
-        vec4 normalMap = texture2D(uNormalMap, distortedUV);
-        normal.xyz = vec3(normalMap.r * 2.0 - 1.0, normalMap.b * 2.0 - 1.0, normalMap.g * 2.0 - 1.0);
-        normal = normalize(normal);
-
-        vec3 viewVector = normalize(vViewPosition);
-        float fresnel = dot(viewVector, normal);
-        fresnel = pow(fresnel, 8.0);
-        fresnel = clamp(fresnel, 0.0, 1.0);
-
-        vec4 water = mix(reflectTexture, refractTexture, fresnel);
-        diffuseColor = mix(water, vec4(uColor, 1.0), 0.2);
-        diffuseColor.a = clamp(waterDepth * 0.9, 0.0, 1.0);
-        `
-            );
+            shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${waterFragment}`);
         }
 
         this.mesh = new THREE.Mesh(this.geometry, this.material);
         this.mesh.scale.set(this.params.size, this.params.size, this.params.size);
         this.mesh.position.y = this.params.waterLevel;
         this.mesh.scale.set(this.params.size, 1, this.params.size)
+
+        this.outputPass = new OutputPass();
+        this.composer.addPass(this.outputPass);
+
+        this.underwaterPass.enabled = true;
     }
 
     getMesh() {
         return this.mesh;
-    }
-
-    update(time) {
-        if (this.material.userData.shader)
-        {
-            this.material.userData.shader.uniforms.uTime.value = time;
-        }
     }
 
     createFBOs() {
@@ -208,9 +161,16 @@ ${shader.vertexShader}
         this.refractionTarget.texture.colorSpace = THREE.SRGBColorSpace;
     }
 
-    renderFBO(camera, scene, renderer) {
+    renderFBO(camera, scene, renderer, time) {
+
+        if (this.material.userData.shader) {
+            this.material.userData.shader.uniforms.uTime.value = time;
+        }
+
         this.mesh.visible = false;
 
+        this.refractionClipPlane.constant = this.params.waterLevel;
+        this.reflectionClipPlane.constant = -this.params.waterLevel;
 
         const originalPosition = camera.position.clone();
         const originalQuaternion = camera.quaternion.clone();
@@ -276,6 +236,19 @@ ${shader.vertexShader}
         renderer.setRenderTarget(null);
 
         this.mesh.visible = true;
+
+        const depth = this.params.waterLevel - camera.position.y;
+        const range = 0.9;
+        let targetWaterLevel = THREE.MathUtils.clamp(depth / range, 0, 1);
+        targetWaterLevel = targetWaterLevel * targetWaterLevel * (3 - 2 * targetWaterLevel);
+
+        const current = this.underwaterPass.uniforms.uUnderwaterFactor.value;
+
+        this.underwaterPass.uniforms.uUnderwaterFactor.value =
+            THREE.MathUtils.lerp(current, targetWaterLevel, 0.05);
+
+        this.underwaterPass.uniforms.uTime.value = time;
+        this.composer.render();
     }
 
     createClippingPlanes() {

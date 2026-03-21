@@ -1,5 +1,5 @@
-import * as THREE from 'three'
 import {Pane} from 'tweakpane'
+import {MathUtils} from "three";
 
 export default class DebugUI {
     constructor(water) {
@@ -19,12 +19,18 @@ export default class DebugUI {
 
         folderWater.addBinding(water.params, 'waterLevel', {label: "Water Y", min: 0, max: 10, step: 0.01}).on('change', (e)=>{
             water.mesh.position.set(0, e.value, 0);
+            water.refractionClipPlane.constant = e.value + water.params.waterLevel + 1;
+            water.reflectionClipPlane.constant = e.value + -water.params.waterLevel + 1;
         });
 
         folderWater.addBinding(water.params, 'moveFactor', {label: "Move Factor", min: 0, max: 1, step: 0.01})
 
-        folderWater.addBinding(water.params, 'waveStrength', {label: "Wave Strength", min: 0, max: 10, step: 0.01}).on('change', (e)=>{
+        folderWater.addBinding(water.params, 'waveStrength', {label: "Wave Strength", min: 0, max: 3, step: 0.01}).on('change', (e)=>{
             water.material.userData.shader.uniforms.uWaveStrength.value = e.value;
         });
+
+        folderWater.addBinding(water.params, 'waterWaveHeight', {label: "Wave Height", min: 0, max: 10, step: 0.01}).on('change', (e)=>{
+            water.material.userData.shader.uniforms.uWaveHeight.value = e.value;
+        })
     }
 }
