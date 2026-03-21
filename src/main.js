@@ -20,7 +20,7 @@ renderer.localClippingEnabled = true;
 document.body.appendChild(renderer.domElement)
 
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
-camera.position.set(0, 0, 0);
+camera.position.set(3, 3, 3);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x3081ff);
@@ -62,7 +62,7 @@ gltfLoader.load(
 
         console.log("Model loaded successfully!", gltf);
     },
-    (xhr) => {
+    () => {
     },
     (error) => {
         console.error('An error happened', error);

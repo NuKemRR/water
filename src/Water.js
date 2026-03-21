@@ -9,7 +9,6 @@ import waterFragment from './shaders/water/water.frag?raw'
 import underwaterVertex from './shaders/water/underwater.vert?raw'
 import underwaterFragment from './shaders/water/underwater.frag?raw'
 import {OutputPass} from 'three/examples/jsm/postprocessing/OutputPass.js'
-import {MathUtils} from "three";
 
 export default class Water {
     constructor(textureLoader, camera, scene, renderer) {
